@@ -22,6 +22,13 @@ contract MultiSigWallet {
 		bool executed;
 	}
 
+	struct ChangeProposal {
+		address proposer;
+		uint required_votes;
+		uint amount_above_voter;
+		bool executed;
+	}
+
 	struct User {
 		address owner;
 		uint amount_invested;
@@ -39,6 +46,10 @@ contract MultiSigWallet {
 	mapping(uint => Proposal) proposals;
 	mapping(uint => mapping(address => bool)) proposal_confirmations;
 	uint proposalCount;
+
+	mapping(uint => ChangeProposal) change_proposals;
+	mapping(uint => mapping(address => bool)) change_proposal_confirmations;
+	uint changeProposalCount;
 	
 	address public owner;
 	uint public amount_above_voter;
@@ -60,6 +71,10 @@ contract MultiSigWallet {
 	event ProposalRevoke(uint indexed proposalId, address indexed user);
 	event TransactionConfirm(uint indexed transactionId, address indexed user);
 	event TransactionRevoke(uint indexed transactionId, address indexed user);
+	event AddChangeProposal(uint indexed proposalId);
+	event ChangeProposalConfirm(uint indexed proposalId, address indexed user);
+	event ChangeProposalRevoke(uint indexed proposalId, address indexed user);
+	event ChangeProposalExecuted(uint indexed proposalId);
 
 	modifier notAnOwner() {
 		require(!isVoter[msg.sender] && !isMember[msg.sender], "notAnOwner");
@@ -140,6 +155,36 @@ contract MultiSigWallet {
         require(address(this).balance > value, "Balance is Low");
         _;
     }
+
+	modifier changeProposalExists(uint _changeProposalId) {
+		require(change_proposals[_changeProposalId].proposer != address(0), "Proposal Doesn't Exists");
+		_;
+	} 
+
+	modifier notChangeProposalExists(uint _changeProposalId) {
+		require(change_proposals[_changeProposalId].proposer == address(0), "Proposal Doesn't Exists");
+		_;
+	} 
+	
+	modifier changeProposalConfirmed(uint _changeProposalId, address sender) {
+		require(change_proposal_confirmations[_changeProposalId][sender], "Proposal is not confirmed by sender!");
+		_;
+	}
+	
+	modifier notChangeProposalConfirmed(uint _changeProposalId, address sender) {
+		require(!change_proposal_confirmations[_changeProposalId][sender], "Proposal already confirmed by sender!");
+		_;
+	}
+	
+	modifier changeProposalExecuted(uint _changeProposalId) {
+		require(change_proposals[_changeProposalId].executed, "Proposal not executed");
+		_;
+	}
+	
+	modifier notChangeProposalExecuted(uint _changeProposalId) {
+		require(!change_proposals[_changeProposalId].executed, "Proposal already executed");
+		_;
+	}
 
 	// Functions
 
@@ -250,6 +295,59 @@ contract MultiSigWallet {
 
 		if(count == required_votes) return true;
 		else return false;
+	}
+
+	/// @dev Creates a Proposal to change required_votes and amount_to_vote
+	function changeConstants(uint _required_votes, uint _amount_to_vote) public anOwner {
+		ChangeProposal memory proposal = ChangeProposal(msg.sender, _required_votes, _amount_to_vote, false);
+		change_proposals[changeProposalCount] = proposal;
+		addConfirmationChangeProposal(changeProposalCount);
+		emit AddChangeProposal(changeProposalCount);
+		changeProposalCount += 1;
+	}
+
+	/// @dev add confirmation for changing constants
+	function addConfirmationChangeProposal(uint _changeProposalId) public anVoter changeProposalExists(_changeProposalId) notChangeProposalConfirmed(_changeProposalId, msg.sender) notChangeProposalExecuted(_changeProposalId) {
+		change_proposal_confirmations[_changeProposalId][msg.sender] = true;
+		emit ChangeProposalConfirm(_changeProposalId, msg.sender);
+		executeChangeProposal(_changeProposalId);
+	}
+
+	/// @dev revoke confirmation for changing constants
+	function revokeConfirmationChangeProposal(uint _changeProposalId) public anVoter changeProposalExists(_changeProposalId) changeProposalConfirmed(_changeProposalId, msg.sender) notChangeProposalExecuted(_changeProposalId) {
+		change_proposal_confirmations[_changeProposalId][msg.sender] = false;
+		emit ChangeProposalRevoke(_changeProposalId, msg.sender);
+	}
+
+	/// @dev Check if a proposal is confirmed
+	function isChangeProposalConfirmed(uint _changeProposalId) public view changeProposalExists(_changeProposalId) notChangeProposalExecuted(_changeProposalId) returns (bool) {
+		uint count = 0;
+		
+		for(uint i=0;i<users.length;i++) {
+			address usr = users[i].owner;
+			if(change_proposal_confirmations[_changeProposalId][usr]) {
+				count += 1;
+			}
+
+			if(count == required_votes) {
+				return true;
+			}
+		}
+
+		if(count == required_votes) return true;
+		else return false;
+	}
+
+	/// @dev execute changes if change proposal is confirmed
+	function executeChangeProposal(uint _changeProposalId) public anVoter changeProposalExists(_changeProposalId) notChangeProposalExecuted(_changeProposalId) {
+		require(isChangeProposalConfirmed(_changeProposalId), "Change Proposal not confirmed yet");
+
+		amount_above_voter = change_proposals[_changeProposalId].amount_above_voter;
+		required_votes = change_proposals[_changeProposalId].required_votes;
+
+		change_proposals[_changeProposalId].executed = true;
+
+		emit ChangeProposalExecuted(_changeProposalId);
 	}
 
 	/// @dev - submit a transaction
